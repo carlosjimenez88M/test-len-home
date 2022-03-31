@@ -1,0 +1,128 @@
+---
+title: "Lender approach"
+output: github_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, message = FALSE, warning = FALSE, cache = FALSE)
+```
+
+
+```{r}
+library(tidyverse)
+library(tidymodels)
+library(scales)
+library(lubridate)
+library(corrr)
+library(corrplot)
+library(tidymetrics)
+library(outliers)
+library(AnomalyDetection)
+library(naniar)
+library(finetune)
+theme_set(theme_light())
+```
+
+
+```{r}
+properties<-read_csv('../test/LH data/properties.csv')
+transactions<-read_csv('../test/LH data/transactions.csv')
+```
+
+
+```{r}
+anomalies<-AnomalyDetectionVec(transactions$transaction_amount,max_anoms = 0.3,direction = 'both',period = 48,plot = TRUE)
+
+anoms<-anomalies$anoms$anoms
+
+transactions<-transactions%>%
+  filter(!transaction_amount %in% anoms)
+
+
+properties<-properties%>%
+  filter(year_built!=0)
+
+full_data_set<-properties %>%
+  left_join(transactions, by = 'property_id')
+
+full_data_set<-full_data_set %>%
+  mutate(lender = str_remove_all(lender,'[*]'),
+         lender = str_remove_all(lender,'[[::punct::]]'))
+
+full_data_set_clean<-full_data_set%>%
+  filter(!is.na(property_address)) %>%
+  select(-property_address)
+
+data_model<-full_data_set_clean %>% 
+  filter(year_built>=1930) %>%
+  select(-c(property_id,seller,buyer)) %>%
+  na.omit() 
+```
+
+
+
+```{r}
+data_model%>%
+  group_by(lender) %>%
+  count(sort = T)%>%
+  filter(n>30)
+```
+```{r}
+lender_filter<-data_model%>%
+  group_by(lender) %>%
+  count(sort = T)%>%
+  filter(n>30)
+
+data_model%>%
+  mutate(lender=str_trim(lender))%>%
+  filter(lender!='OTHER INSTITUTIONAL LEN')%>%
+  filter(lender!='OTHER INSTITUTIONAL LENDE')%>%
+  filter(lender %in% lender_filter$lender) %>%
+  group_by(lender,transaction_date,property_type) %>%
+  summarize(transaction_amount=mean(transaction_amount),
+            total_events=n()) %>%
+  group_by(property_type,transaction_date)%>%
+  mutate(total_transactions=sum(transaction_amount),
+         pct_transaction=transaction_amount/total_transactions)%>%
+  filter(total_events>1) %>%
+  ungroup() %>%
+  ggplot(aes(transaction_date,transaction_amount))+
+  geom_line(alpha=0.4)+
+  geom_smooth(group=1,method = 'loess')+
+  geom_point(aes(size=total_events,color=property_type))+
+  geom_text(aes(label=lender),
+            check_overlap = TRUE,
+            hjust=1,
+            size=2)+
+  labs(title = 'relation between Type of property and lender',
+       subtitle = 'Empirical Design to profile propierties under lender',
+       x='',
+       y='Transaction amount')
+  
+
+#geom_text(aes(label=property_type),check_overlap = TRUE,hjust=1, show.legend = F)
+```
+
+Here I try evaluate the profile and efects to transactions under lender focus and total events by date
+
+My metric are ratio between total transaction for all propierties by lender
+
+```{r}
+data_model%>%
+  mutate(lender=str_trim(lender))%>%
+  filter(lender!='OTHER INSTITUTIONAL LEN')%>%
+  filter(lender!='OTHER INSTITUTIONAL LENDE')%>%
+  filter(lender %in% lender_filter$lender) %>%
+  group_by(lender,transaction_date,property_type) %>%
+  summarize(transaction_amount=mean(transaction_amount),
+            total_events=n()) %>%
+  group_by(property_type,transaction_date)%>%
+  mutate(total_transactions=sum(transaction_amount),
+         pct_transaction=transaction_amount/total_transactions)%>%
+  filter(total_events>1) %>%
+  ungroup() %>%
+  sample_n(10)%>%
+  as_tibble()%>%
+  select(-c(transaction_amount,total_events))
+```
+
